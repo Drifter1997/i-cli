@@ -52,13 +52,32 @@ A minimal, fast, and simple CLI/TUI Instagram messaging client designed for Neov
 
 ---
 
-## ⌨️ Commands Reference
+## ⌨️ Commands & Vim Navigation
+
+### Modes
+- **INSERT Mode** (default): Type messages or `:commands` and press `Enter` to send instantly. Press `Esc` to enter NORMAL mode.
+- **NORMAL Mode**: Full Vim message navigation. Press `i` or `a` to return to INSERT mode.
 
 ### In Chat Window
 
+#### Vim Navigation (NORMAL Mode)
+| Key | Action |
+|---|---|
+| `j` / `Down` | Scroll down 1 line |
+| `k` / `Up` | Scroll up 1 line |
+| `Ctrl+d` / `PageDown` | Scroll down half page |
+| `Ctrl+u` / `PageUp` | Scroll up half page |
+| `gg` | Jump to top (oldest messages) |
+| `G` | Jump to bottom (latest messages) |
+| `i` / `a` | Enter INSERT mode to type |
+| `Esc` | Return to NORMAL mode |
+
+*(Note: `PageUp` and `PageDown` also work directly while in INSERT mode)*
+
+#### Chat Commands
 | Command | Action |
 |---|---|
-| `<text>` | Send regular message (or vanish message if Vanish Mode is on) |
+| `<text>` | Send regular message (or vanish message if Vanish Mode is on) — sent instantly with 0ms UI lag |
 | `:p` | Play / preview most recent media in RAM (`imv` / `mpv`) |
 | `:p <n>` | Play / preview media item `#n` in RAM |
 | `:d` | Explicitly download most recent media to `~/Downloads/` |
@@ -71,10 +90,11 @@ A minimal, fast, and simple CLI/TUI Instagram messaging client designed for Neov
 | `:q` | Quit application |
 
 ### In Inbox / Thread List
-
-| Command | Action |
+| Key / Command | Action |
 |---|---|
-| `1`, `2`, `...` | Open selected conversation |
+| `j` / `Down` | Move selector down |
+| `k` / `Up` | Move selector up |
+| `Enter` / `1-9` | Open selected conversation |
 | `:r` | Refresh inbox threads |
 | `:logout` | Clear saved session and logout |
 | `:q` | Quit application |
