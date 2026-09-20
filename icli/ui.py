@@ -497,19 +497,24 @@ class TerminalUI:
         is_cmd = self.input_buffer.startswith(":")
         footer_height = 4 if is_cmd else 3
         viewport_height = max(1, rows - header_height - footer_height)
+        clean_lines = max(2, viewport_height // 4)
 
         total_lines = len(self.rendered_lines)
-        max_scroll = max(0, total_lines - viewport_height)
+        max_scroll = max(0, total_lines - (viewport_height - clean_lines))
         self.scroll_offset = max(0, min(self.scroll_offset, max_scroll))
 
-        start_idx = max(0, total_lines - viewport_height - self.scroll_offset)
-        end_idx = min(total_lines, start_idx + viewport_height)
+        # Dynamic clean margin: reserves 1/4 clean space at the bottom for new messages
+        current_clean = max(0, clean_lines - self.scroll_offset)
+        disp_height = max(1, viewport_height - current_clean)
+
+        end_idx = max(0, total_lines - self.scroll_offset)
+        start_idx = max(0, end_idx - disp_height)
         visible = self.rendered_lines[start_idx:end_idx]
 
         for line in visible:
             frame.append(line + "\033[K\n")
 
-        # Fill empty lines if lines < viewport_height
+        # Fill remaining lines (includes the 1/4 clean space at the bottom for new messages)
         for _ in range(viewport_height - len(visible)):
             frame.append("\033[K\n")
 
@@ -595,8 +600,8 @@ class TerminalUI:
         self.input_buffer = ""
         self.scroll_offset = 0
 
-        # Initial fetch
-        self.messages = self.client.get_thread_messages(thread_id, amount=50)
+        # Initial fetch (lean and fast, keeping window clean)
+        self.messages = self.client.get_thread_messages(thread_id, amount=25)
         self.rebuild_line_buffer()
 
         # Start background polling
@@ -616,53 +621,68 @@ class TerminalUI:
                         self.running = False
                         break
 
-                    # 1. Scrolling: Arrow keys, Touchpad/Mouse Wheel, and PageUp/PageDown
-                    if key in ("UP", "MOUSE_UP", "PAGE_UP"):
-                        delta = 1
-                        if key == "MOUSE_UP":
-                            delta = 3
-                        elif key == "PAGE_UP":
-                            delta = 6
+                    # 1. Fast, responsive scrolling with burst event coalescing
+                    if key in ("UP", "MOUSE_UP", "PAGE_UP", "DOWN", "MOUSE_DOWN", "PAGE_DOWN"):
+                        delta = 0
+                        curr_k = key
+                        while True:
+                            if curr_k == "UP":
+                                delta += 2
+                            elif curr_k == "MOUSE_UP":
+                                delta += 5
+                            elif curr_k == "PAGE_UP":
+                                delta += 10
+                            elif curr_k == "DOWN":
+                                delta -= 2
+                            elif curr_k == "MOUSE_DOWN":
+                                delta -= 5
+                            elif curr_k == "PAGE_DOWN":
+                                delta -= 10
+
+                            # Consume any pending scroll keys in buffer to prevent jitter
+                            if _key_buffer and _key_buffer[0] in ("UP", "MOUSE_UP", "PAGE_UP", "DOWN", "MOUSE_DOWN", "PAGE_DOWN"):
+                                curr_k = _key_buffer.pop(0)
+                            else:
+                                break
 
                         total = len(self.rendered_lines)
                         cols, rows = self.get_term_size()
                         is_cmd = self.input_buffer.startswith(":")
                         footer_h = 4 if is_cmd else 3
-                        max_s = max(0, total - (rows - (3 + footer_h)))
+                        viewport_h = max(1, rows - (3 + footer_h))
+                        clean_lines = max(2, viewport_h // 4)
+                        max_s = max(0, total - (viewport_h - clean_lines))
 
-                        # If user scrolled to the top and older messages might exist on Instagram:
-                        if self.scroll_offset >= max_s and not getattr(self, "_loading_older", False) and len(self.messages) < 200:
-                            self._loading_older = True
-                            self.set_status("Fetching older messages from Instagram...")
-                            try:
-                                next_amount = len(self.messages) + 30
-                                older_msgs = self.client.get_thread_messages(thread_id, amount=next_amount)
-                                if len(older_msgs) > len(self.messages):
-                                    old_total = len(self.rendered_lines)
-                                    self.messages = older_msgs
-                                    self.rebuild_line_buffer()
-                                    new_total = len(self.rendered_lines)
-                                    self.scroll_offset += (new_total - old_total)
-                                    total = new_total
-                                    max_s = max(0, total - (rows - (3 + footer_h)))
-                                    self.set_status(f"Loaded {len(older_msgs)} messages")
-                                else:
-                                    self.set_status("Reached start of conversation")
-                            except Exception:
-                                pass
-                            finally:
-                                self._loading_older = False
+                        if delta > 0:
+                            self.scroll_offset = min(max_s, self.scroll_offset + delta)
+                            # Asynchronous background pagination (NEVER blocks the UI)
+                            if self.scroll_offset >= max_s and not getattr(self, "_loading_older", False) and not getattr(self, "_no_more_older", False) and len(self.messages) < 200:
+                                self._loading_older = True
+                                self.set_status("Loading older messages...")
 
-                        self.scroll_offset = min(max_s, self.scroll_offset + delta)
-                        self.render_chat_screen()
+                                def async_load_older(th_id, curr_len):
+                                    try:
+                                        older = self.client.get_thread_messages(th_id, amount=curr_len + 25)
+                                        if len(older) > curr_len:
+                                            old_total = len(self.rendered_lines)
+                                            self.messages = older
+                                            self.rebuild_line_buffer()
+                                            new_total = len(self.rendered_lines)
+                                            self.scroll_offset += (new_total - old_total)
+                                            self.render_chat_screen()
+                                            self.set_status(f"Loaded {len(older)} messages")
+                                        else:
+                                            self._no_more_older = True
+                                            self.set_status("Beginning of conversation")
+                                    except Exception:
+                                        pass
+                                    finally:
+                                        self._loading_older = False
 
-                    elif key in ("DOWN", "MOUSE_DOWN", "PAGE_DOWN"):
-                        delta = 1
-                        if key == "MOUSE_DOWN":
-                            delta = 3
-                        elif key == "PAGE_DOWN":
-                            delta = 6
-                        self.scroll_offset = max(0, self.scroll_offset - delta)
+                                threading.Thread(target=async_load_older, args=(thread_id, len(self.messages)), daemon=True).start()
+                        else:
+                            self.scroll_offset = max(0, self.scroll_offset + delta)
+
                         self.render_chat_screen()
 
                     elif key == "BACKSPACE":

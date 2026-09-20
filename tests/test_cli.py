@@ -134,6 +134,23 @@ class TestInstagramCLI(unittest.TestCase):
         self.assertEqual(parse_input_bytes(b"\x1b[5~"), ["PAGE_UP"])
         self.assertEqual(parse_input_bytes(b"\x1b[6~"), ["PAGE_DOWN"])
 
+    def test_clean_zone_at_bottom(self):
+        self.ui.rendered_lines = [f"Message line {i}" for i in range(40)]
+        self.ui.scroll_offset = 0
+        rows = 24
+        header_h = 3
+        footer_h = 3
+        viewport_h = rows - header_h - footer_h  # 18
+        clean_lines = max(2, viewport_h // 4)    # 4
+
+        disp_h = viewport_h - clean_lines
+        end_idx = len(self.ui.rendered_lines)
+        start_idx = max(0, end_idx - disp_h)
+        visible = self.ui.rendered_lines[start_idx:end_idx]
+        self.assertEqual(len(visible), 14)
+        empty_lines = viewport_h - len(visible)
+        self.assertEqual(empty_lines, clean_lines)
+
 
 if __name__ == "__main__":
     unittest.main()
