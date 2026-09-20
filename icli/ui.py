@@ -62,13 +62,14 @@ def read_key(timeout: float = 0.1) -> Optional[str]:
 
     ch = sys.stdin.read(1)
     if ch == "\033":
-        # Check if more characters follow
+        # Check if more characters follow immediately
         r2, _, _ = select.select([sys.stdin], [], [], 0.05)
         if not r2:
             return "ESC"
         ch2 = sys.stdin.read(1)
         if ch2 == "[":
             ch3 = sys.stdin.read(1)
+            # Arrow keys
             if ch3 == "A":
                 return "UP"
             elif ch3 == "B":
@@ -77,42 +78,35 @@ def read_key(timeout: float = 0.1) -> Optional[str]:
                 return "RIGHT"
             elif ch3 == "D":
                 return "LEFT"
-            elif ch3 == "5":
-                sys.stdin.read(1)  # consume ~
-                return "PAGE_UP"
-            elif ch3 == "6":
-                sys.stdin.read(1)  # consume ~
-                return "PAGE_DOWN"
-            elif ch3 in ("H", "1", "7"):
-                if ch3 != "H":
-                    sys.stdin.read(1)
-                return "HOME"
-            elif ch3 in ("F", "4", "8"):
-                if ch3 != "F":
-                    sys.stdin.read(1)
-                return "END"
-            else:
-                return "ESC"
+            # If any other CSI sequence (like PageUp/Down or modifiers), drain until terminating char
+            curr = ch3
+            while curr and not (curr.isalpha() or curr == "~"):
+                r_more, _, _ = select.select([sys.stdin], [], [], 0.02)
+                if r_more:
+                    curr = sys.stdin.read(1)
+                else:
+                    break
+            if curr == "A":
+                return "UP"
+            elif curr == "B":
+                return "DOWN"
+            return None
         elif ch2 == "O":
             ch3 = sys.stdin.read(1)
-            if ch3 == "A": return "UP"
-            elif ch3 == "B": return "DOWN"
-            elif ch3 == "C": return "RIGHT"
-            elif ch3 == "D": return "LEFT"
-            return "ESC"
+            if ch3 == "A":
+                return "UP"
+            elif ch3 == "B":
+                return "DOWN"
+            return None
         return "ESC"
     elif ch in ("\r", "\n"):
         return "ENTER"
     elif ch in ("\x7f", "\x08"):
         return "BACKSPACE"
-    elif ch == "\x04":
-        return "CTRL_D"
-    elif ch == "\x15":
-        return "CTRL_U"
     elif ch == "\x03":
         return "CTRL_C"
-    elif ch == "\t":
-        return "TAB"
+    elif ch == "\x15":
+        return "CTRL_U"
     return ch
 
 
@@ -127,7 +121,6 @@ class TerminalUI:
 
         self.scroll_offset = 0  # 0 = at bottom (latest)
         self.vanish_mode_active = False
-        self.mode = "INSERT"  # "INSERT" or "NORMAL"
         self.input_buffer = ""
         self.status_message = ""
         self.status_time = 0.0
@@ -363,7 +356,7 @@ class TerminalUI:
         else:
             for msg in self.messages:
                 is_me = msg.get("is_me", False)
-                sender = "You" if is_me else (self.current_thread.get("title", "User"))
+                sender = "You" if is_me else (self.current_thread.get("title", "User") if self.current_thread else "User")
                 sender_color = GREEN if is_me else CYAN
                 time_str = self.format_timestamp(msg.get("timestamp"))
 
@@ -409,17 +402,17 @@ class TerminalUI:
         frame = ["\033[H"]  # Home cursor to 1,1
 
         # Header (3 lines)
-        title = self.current_thread.get("title", "Direct Message")
-        vanish_badge = f" {BOLD}{MAGENTA}[👻 VANISH MODE ACTIVE]{RESET}" if self.vanish_mode_active else ""
-        mode_badge = f"{BOLD}{GREEN}[INSERT]{RESET}" if self.mode == "INSERT" else f"{BOLD}{YELLOW}[NORMAL - VIM SCROLL]{RESET}"
+        title = self.current_thread.get("title", "Direct Message") if self.current_thread else "Direct Message"
+        vanish_badge = f" {BOLD}{MAGENTA}[👻 VANISH ACTIVE]{RESET}" if self.vanish_mode_active else ""
 
         frame.append(f"{BOLD}{BLUE}═" * (cols - 1) + f"{RESET}\033[K\n")
-        frame.append(f" {BOLD}Chat: {CYAN}@{title}{RESET}{vanish_badge}  {mode_badge}\033[K\n")
+        frame.append(f" {BOLD}Chat: {CYAN}@{title}{RESET}{vanish_badge}  {DIM}(↑/↓: scroll history  │  type ':' for commands){RESET}\033[K\n")
         frame.append(f"{BOLD}{BLUE}═" * (cols - 1) + f"{RESET}\033[K\n")
 
         # Chat viewport calculation
         header_height = 3
-        footer_height = 3  # status line, separator, input prompt
+        is_cmd = self.input_buffer.startswith(":")
+        footer_height = 4 if is_cmd else 3
         viewport_height = max(1, rows - header_height - footer_height)
 
         total_lines = len(self.rendered_lines)
@@ -444,7 +437,7 @@ class TerminalUI:
 
         scroll_indicator = ""
         if self.scroll_offset > 0:
-            scroll_indicator = f" {YELLOW}{BOLD}[SCROLLED UP: -{self.scroll_offset} lines (Down/G: bottom)]{RESET}"
+            scroll_indicator = f" {YELLOW}{BOLD}[SCROLLED UP: -{self.scroll_offset} lines (Press Down Arrow to return)]{RESET}"
 
         status_notice = ""
         if self.status_message and (time.time() - self.status_time < 4.0):
@@ -453,12 +446,26 @@ class TerminalUI:
         frame.append(f"{DIM}─" * (cols - 1) + f"{RESET}\033[K\n")
         frame.append(f" [Vanish: {v_state}]  [{media_str}]{scroll_indicator}{status_notice}\033[K\n")
 
+        # Display command hints when user types ':'
+        if is_cmd:
+            cmd_hints = (
+                f"{CYAN}{BOLD}Commands:{RESET} "
+                f"{BOLD}:p{RESET} play in RAM  │ "
+                f"{BOLD}:d{RESET} download  │ "
+                f"{BOLD}:rec{RESET} voice note  │ "
+                f"{BOLD}:photo <path>{RESET}  │ "
+                f"{BOLD}:video <path>{RESET}  │ "
+                f"{BOLD}:audio <path>{RESET}  │ "
+                f"{BOLD}:v{RESET} vanish  │ "
+                f"{BOLD}:t{RESET} inbox  │ "
+                f"{BOLD}:r{RESET} refresh  │ "
+                f"{BOLD}:q{RESET} quit"
+            )
+            frame.append(cmd_hints + "\033[K\n")
+
         # Input Prompt
-        if self.mode == "INSERT":
-            prompt = f"{MAGENTA}👻 [VANISH] > {RESET}" if self.vanish_mode_active else f"{CYAN}> {RESET}"
-            frame.append(f"{prompt}{self.input_buffer}\033[K")
-        else:
-            frame.append(f"{YELLOW}NORMAL{RESET} (j/k: scroll, i: insert, :p: play, :d: save, :v: vanish, :t: inbox, :q: quit)\033[K")
+        prompt = f"{MAGENTA}👻 [VANISH] > {RESET}" if self.vanish_mode_active else f"{CYAN}> {RESET}"
+        frame.append(f"{prompt}{self.input_buffer}\033[K")
 
         frame.append("\033[J")
         sys.stdout.write("".join(frame))
@@ -502,7 +509,6 @@ class TerminalUI:
 
         thread_id = self.current_thread["id"]
         self.vanish_mode_active = self.current_thread.get("shh_mode_enabled", False)
-        self.mode = "INSERT"
         self.input_buffer = ""
         self.scroll_offset = 0
 
@@ -517,8 +523,6 @@ class TerminalUI:
             with RawTerminal():
                 self.render_chat_screen()
 
-                last_g_time = 0.0
-
                 while self.running:
                     key = read_key(timeout=0.1)
                     if not key:
@@ -529,170 +533,93 @@ class TerminalUI:
                         self.running = False
                         break
 
-                    # INSERT MODE
-                    if self.mode == "INSERT":
-                        if key == "ESC":
-                            self.mode = "NORMAL"
+                    # 1. Arrow keys scroll message history
+                    if key == "UP":
+                        total = len(self.rendered_lines)
+                        cols, rows = self.get_term_size()
+                        is_cmd = self.input_buffer.startswith(":")
+                        footer_h = 4 if is_cmd else 3
+                        max_s = max(0, total - (rows - (3 + footer_h)))
+                        self.scroll_offset = min(max_s, self.scroll_offset + 1)
+                        self.render_chat_screen()
+
+                    elif key == "DOWN":
+                        self.scroll_offset = max(0, self.scroll_offset - 1)
+                        self.render_chat_screen()
+
+                    elif key == "BACKSPACE":
+                        if self.input_buffer:
+                            self.input_buffer = self.input_buffer[:-1]
                             self.render_chat_screen()
 
-                        elif key == "UP":
-                            total = len(self.rendered_lines)
-                            cols, rows = self.get_term_size()
-                            max_s = max(0, total - (rows - 6))
-                            self.scroll_offset = min(max_s, self.scroll_offset + 1)
-                            self.render_chat_screen()
+                    elif key == "CTRL_U":
+                        self.input_buffer = ""
+                        self.render_chat_screen()
 
-                        elif key == "DOWN":
-                            self.scroll_offset = max(0, self.scroll_offset - 1)
-                            self.render_chat_screen()
-
-                        elif key in ("PAGE_UP", "PAGE_DOWN"):
-                            cols, rows = self.get_term_size()
-                            page_step = max(4, rows // 2)
-                            total = len(self.rendered_lines)
-                            max_s = max(0, total - (rows - 6))
-                            if key == "PAGE_UP":
-                                self.scroll_offset = min(max_s, self.scroll_offset + page_step)
-                            else:
-                                self.scroll_offset = max(0, self.scroll_offset - page_step)
-                            self.render_chat_screen()
-
-                        elif key == "BACKSPACE":
-                            if self.input_buffer:
-                                self.input_buffer = self.input_buffer[:-1]
-                                self.render_chat_screen()
-
-                        elif key == "CTRL_U":
+                    elif key == "ESC":
+                        if self.input_buffer:
                             self.input_buffer = ""
                             self.render_chat_screen()
-
-                        elif key == "ENTER":
-                            text = self.input_buffer.strip()
-                            self.input_buffer = ""
-
-                            if not text:
-                                self.render_chat_screen()
-                                continue
-
-                            # Check for commands
-                            if text.startswith(":"):
-                                should_exit = self.handle_chat_command(text, thread_id)
-                                if should_exit:
-                                    break
-                                self.render_chat_screen()
-                                continue
-
-                            # INSTANT REAL-TIME SEND
-                            # 1. Immediately append to in-memory messages
-                            local_id = f"local_{uuid.uuid4().hex[:6]}"
-                            local_msg = {
-                                "id": local_id,
-                                "user_id": self.client.user_id,
-                                "is_me": True,
-                                "timestamp": datetime.now(),
-                                "text": text,
-                                "item_type": "text",
-                                "is_vanish": self.vanish_mode_active,
-                                "media": None,
-                                "pending": True
-                            }
-                            self.messages.append(local_msg)
-                            self.scroll_offset = 0  # Snap to bottom
-                            self.rebuild_line_buffer()
-                            self.render_chat_screen()  # 0ms screen update!
-
-                            # 2. Dispatch network send in background thread
-                            def async_sender(th_id, msg_text, is_v, l_msg):
-                                res = self.client.send_message(th_id, msg_text, is_vanish=is_v)
-                                l_msg["pending"] = False
-                                if res and res.get("id"):
-                                    l_msg["id"] = res["id"]
-                                self.rebuild_line_buffer()
-                                if self.scroll_offset == 0:
-                                    self.render_chat_screen()
-
-                            threading.Thread(
-                                target=async_sender,
-                                args=(thread_id, text, self.vanish_mode_active, local_msg),
-                                daemon=True
-                            ).start()
-
-                        else:
-                            # Regular character typed
-                            if len(key) == 1 and key.isprintable():
-                                self.input_buffer += key
-                                self.render_chat_screen()
-
-                    # NORMAL (VIM SCROLL) MODE
-                    elif self.mode == "NORMAL":
-                        if key in ("i", "a"):
-                            self.mode = "INSERT"
-                            self.render_chat_screen()
-
-                        elif key in ("j", "DOWN"):
-                            self.scroll_offset = max(0, self.scroll_offset - 1)
-                            self.render_chat_screen()
-
-                        elif key in ("k", "UP"):
-                            total = len(self.rendered_lines)
-                            cols, rows = self.get_term_size()
-                            max_s = max(0, total - (rows - 6))
-                            self.scroll_offset = min(max_s, self.scroll_offset + 1)
-                            self.render_chat_screen()
-
-                        elif key in ("CTRL_D", "PAGE_DOWN"):
-                            cols, rows = self.get_term_size()
-                            self.scroll_offset = max(0, self.scroll_offset - (rows // 2))
-                            self.render_chat_screen()
-
-                        elif key in ("CTRL_U", "PAGE_UP"):
-                            cols, rows = self.get_term_size()
-                            total = len(self.rendered_lines)
-                            max_s = max(0, total - (rows - 6))
-                            self.scroll_offset = min(max_s, self.scroll_offset + (rows // 2))
-                            self.render_chat_screen()
-
-                        elif key == "G":
-                            # Jump to bottom (latest)
+                        elif self.scroll_offset > 0:
                             self.scroll_offset = 0
                             self.render_chat_screen()
 
-                        elif key == "g":
-                            # Double-g (gg) jumps to top
-                            now = time.time()
-                            if now - last_g_time < 0.6:
-                                total = len(self.rendered_lines)
-                                cols, rows = self.get_term_size()
-                                self.scroll_offset = max(0, total - (rows - 6))
-                                self.render_chat_screen()
-                                last_g_time = 0.0
-                            else:
-                                last_g_time = now
+                    elif key == "ENTER":
+                        text = self.input_buffer.strip()
+                        self.input_buffer = ""
 
-                        elif key == ":":
-                            # Enter command prompt
-                            self.mode = "INSERT"
-                            self.input_buffer = ":"
+                        if not text:
                             self.render_chat_screen()
+                            continue
 
-                        elif key == "v":
-                            self.vanish_mode_active = not self.vanish_mode_active
-                            state_str = "ON" if self.vanish_mode_active else "OFF"
-                            self.set_status(f"Vanish Mode turned {state_str}")
+                        # Check for commands
+                        if text.startswith(":"):
+                            should_exit = self.handle_chat_command(text, thread_id)
+                            if should_exit:
+                                break
+                            self.render_chat_screen()
+                            continue
 
-                        elif key == "r":
-                            self.set_status("Refreshing...")
-                            self.messages = self.client.get_thread_messages(thread_id, amount=30)
+                        # INSTANT REAL-TIME SEND
+                        # 1. Immediately append to in-memory messages
+                        local_id = f"local_{uuid.uuid4().hex[:6]}"
+                        local_msg = {
+                            "id": local_id,
+                            "user_id": self.client.user_id,
+                            "is_me": True,
+                            "timestamp": datetime.now(),
+                            "text": text,
+                            "item_type": "text",
+                            "is_vanish": self.vanish_mode_active,
+                            "media": None,
+                            "pending": True
+                        }
+                        self.messages.append(local_msg)
+                        self.scroll_offset = 0  # Snap back to bottom
+                        self.rebuild_line_buffer()
+                        self.render_chat_screen()  # 0ms screen update!
+
+                        # 2. Dispatch network send in background thread
+                        def async_sender(th_id, msg_text, is_v, l_msg):
+                            res = self.client.send_message(th_id, msg_text, is_vanish=is_v)
+                            l_msg["pending"] = False
+                            if res and res.get("id"):
+                                l_msg["id"] = res["id"]
                             self.rebuild_line_buffer()
+                            if self.scroll_offset == 0:
+                                self.render_chat_screen()
+
+                        threading.Thread(
+                            target=async_sender,
+                            args=(thread_id, text, self.vanish_mode_active, local_msg),
+                            daemon=True
+                        ).start()
+
+                    else:
+                        # Regular character typed
+                        if len(key) == 1 and key.isprintable():
+                            self.input_buffer += key
                             self.render_chat_screen()
-
-                        elif key == "t":
-                            # Return to inbox
-                            break
-
-                        elif key == "q":
-                            self.running = False
-                            break
 
         finally:
             self.poll_active = False
@@ -1005,19 +932,11 @@ class TerminalUI:
         """Show command help modal."""
         sys.stdout.write("\033[2J\033[H")
         print(f"{BOLD}{CYAN}=== i-cli Commands & Navigation Help ==={RESET}\n")
-        print(f"  {BOLD}INSERT Mode (Typing){RESET}:")
-        print(f"    {BOLD}Up{RESET} / {BOLD}Down{RESET}       Scroll through message history directly while typing")
-        print(f"    {BOLD}PgUp{RESET} / {BOLD}PgDn{RESET}     Scroll page-by-page through message history")
-        print(f"    {BOLD}Esc{RESET}            Enter NORMAL mode for Vim navigation\n")
-        print(f"  {BOLD}NORMAL Mode (Vim Navigation){RESET}:")
-        print(f"    {BOLD}j{RESET} / {BOLD}Down{RESET}       Scroll down 1 line")
-        print(f"    {BOLD}k{RESET} / {BOLD}Up{RESET}         Scroll up 1 line")
-        print(f"    {BOLD}Ctrl+d{RESET} / {BOLD}PgDn{RESET} Scroll down half page")
-        print(f"    {BOLD}Ctrl+u{RESET} / {BOLD}PgUp{RESET} Scroll up half page")
-        print(f"    {BOLD}gg{RESET}             Jump to oldest message (top)")
-        print(f"    {BOLD}G{RESET}              Jump to latest message (bottom)")
-        print(f"    {BOLD}i{RESET} / {BOLD}a{RESET}          Enter INSERT mode to type\n")
-        print(f"  {BOLD}Media Viewing & Downloading{RESET}:")
+        print(f"  {BOLD}Navigation & Messaging{RESET}:")
+        print(f"    {BOLD}Up{RESET} / {BOLD}Down{RESET}       Scroll through message history")
+        print(f"    {BOLD}Esc{RESET}            Clear input / return to latest message")
+        print(f"    {BOLD}Enter{RESET}          Send message (or execute command)\n")
+        print(f"  {BOLD}Commands (Type ':' in chat to see hints){RESET}:")
         print(f"    {BOLD}:p [n]{RESET}         Play media in RAM ({BOLD}imv{RESET} for images, {BOLD}mpv{RESET} for video/audio)")
         print(f"    {BOLD}:d [n]{RESET}         Download media to {BOLD}~/Downloads/{RESET}\n")
         print(f"  {BOLD}Sending Media & Voice Notes{RESET}:")

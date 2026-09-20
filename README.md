@@ -52,35 +52,26 @@ A minimal, fast, and simple CLI/TUI Instagram messaging client designed for Neov
 
 ---
 
-## ⌨️ Commands & Vim Navigation
+## ⌨️ Controls & Navigation
 
-### Modes
-- **INSERT Mode** (default): Type messages or `:commands` and press `Enter` to send instantly. Press `Up` / `Down` arrows to scroll through message history directly while typing. Press `Esc` to enter NORMAL mode.
-- **NORMAL Mode**: Full Vim message navigation. Press `i` or `a` to return to INSERT mode.
+### Unified Single-Mode Interface
+There are no confusing modes or mode-switching keys (like NORMAL vs INSERT):
+- **Send Messages**: Simply start typing your message and hit `Enter` to send instantly (0ms optimistic latency).
+- **Commands**: Type `:` in the prompt to immediately display the interactive command bar with all available commands and shortcuts.
+- **Scroll History**: Use `Up` and `Down` arrow keys to scroll through older messages line-by-line.
+- **Clear / Reset**: Press `Esc` to clear your input or snap back to the latest message.
 
 ### In Chat Window
 
-#### Scrolling in INSERT Mode
-- `Up` Arrow: Scroll up through previous messages
+#### Navigation
+- `Up` Arrow: Scroll up through older messages
 - `Down` Arrow: Scroll down towards recent messages
-- `PageUp` / `PageDown`: Fast page scrolling
+- `Esc`: Clear input buffer or snap back to the bottom
 
-#### Vim Navigation (NORMAL Mode)
-| Key | Action |
-|---|---|
-| `j` / `Down` | Scroll down 1 line |
-| `k` / `Up` | Scroll up 1 line |
-| `Ctrl+d` / `PageDown` | Scroll down half page |
-| `Ctrl+u` / `PageUp` | Scroll up half page |
-| `gg` | Jump to top (oldest messages) |
-| `G` | Jump to bottom (latest messages) |
-| `i` / `a` | Enter INSERT mode to type |
-| `Esc` | Return to NORMAL mode |
-
-#### Chat Commands
+#### Chat Commands (Type `:` to view inline)
 | Command | Action |
 |---|---|
-| `<text>` | Send regular message (or vanish message if Vanish Mode is on) — sent instantly with 0ms UI lag |
+| `<text>` | Send regular message (or vanish message if Vanish Mode is on) — instant 0ms optimistic send |
 | `:rec` / `:record` | **Record voice note from microphone** in RAM and send |
 | `:photo <path>` | Send a photo file (JPG/PNG/WebP) to conversation |
 | `:video <path>` | Send an MP4 video file to conversation |
