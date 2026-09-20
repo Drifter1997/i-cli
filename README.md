@@ -58,15 +58,16 @@ A minimal, fast, and simple CLI/TUI Instagram messaging client designed for Neov
 There are no confusing modes or mode-switching keys (like NORMAL vs INSERT):
 - **Send Messages**: Simply start typing your message and hit `Enter` to send instantly (0ms optimistic latency).
 - **Commands**: Type `:` in the prompt to immediately display the interactive command bar with all available commands and shortcuts.
-- **Scroll History**: Use `Up` and `Down` arrow keys to scroll through older messages line-by-line.
+- **Scroll History**: Use `Up` and `Down` arrow keys, or scroll smoothly with your **Touchpad** or **Mouse Wheel**.
 - **Clear / Reset**: Press `Esc` to clear your input or snap back to the latest message.
 
 ### In Chat Window
 
-#### Navigation
-- `Up` Arrow: Scroll up through older messages
-- `Down` Arrow: Scroll down towards recent messages
-- `Esc`: Clear input buffer or snap back to the bottom
+#### Navigation & Scrolling
+- `Up` Arrow / **Touchpad Scroll Up** / **Mouse Wheel Up**: Scroll up into older message history (automatically fetches earlier messages when reaching the top).
+- `Down` Arrow / **Touchpad Scroll Down** / **Mouse Wheel Down**: Scroll down towards latest messages.
+- `PageUp` / `PageDown`: Fast chunk scrolling (6 lines per stroke).
+- `Esc`: Clear input buffer or snap immediately back to the bottom.
 
 #### Chat Commands (Type `:` to view inline)
 | Command | Action |

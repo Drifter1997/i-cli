@@ -110,6 +110,30 @@ class TestInstagramCLI(unittest.TestCase):
         self.assertIn("📞", lines_text)
         self.assertIn("Call Event: Call ended", lines_text)
 
+    def test_parse_input_bytes_arrows(self):
+        from icli.ui import parse_input_bytes
+        self.assertEqual(parse_input_bytes(b"\x1b[A"), ["UP"])
+        self.assertEqual(parse_input_bytes(b"\x1b[B"), ["DOWN"])
+        self.assertEqual(parse_input_bytes(b"\x1bOA"), ["UP"])
+        self.assertEqual(parse_input_bytes(b"\x1bOB"), ["DOWN"])
+        self.assertEqual(parse_input_bytes(b"\x1b[1;2A"), ["UP"])
+        self.assertEqual(parse_input_bytes(b"\x1b[1;5B"), ["DOWN"])
+
+    def test_parse_input_bytes_mouse_touchpad(self):
+        from icli.ui import parse_input_bytes
+        # SGR Mouse wheel up
+        self.assertEqual(parse_input_bytes(b"\x1b[<64;25;12M"), ["MOUSE_UP"])
+        # SGR Mouse wheel down
+        self.assertEqual(parse_input_bytes(b"\x1b[<65;25;12M"), ["MOUSE_DOWN"])
+        # Mouse click (btn 0) and release (btn 0, lowercase m) should be ignored
+        self.assertEqual(parse_input_bytes(b"\x1b[<0;25;12M"), [])
+        self.assertEqual(parse_input_bytes(b"\x1b[<0;25;12m"), [])
+
+    def test_parse_input_bytes_page_keys(self):
+        from icli.ui import parse_input_bytes
+        self.assertEqual(parse_input_bytes(b"\x1b[5~"), ["PAGE_UP"])
+        self.assertEqual(parse_input_bytes(b"\x1b[6~"), ["PAGE_DOWN"])
+
 
 if __name__ == "__main__":
     unittest.main()

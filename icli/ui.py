@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import time
 import uuid
 import select
@@ -35,79 +36,161 @@ BG_DARK = "\033[48;5;236m"
 BG_STATUS = "\033[48;5;238m"
 
 
+_key_buffer: List[str] = []
+
+
 class RawTerminal:
-    """Context manager for terminal raw/cbreak mode."""
-    def __init__(self):
-        self.fd = sys.stdin.fileno()
+    """Context manager for terminal raw/cbreak mode with SGR mouse tracking."""
+    def __init__(self, enable_mouse: bool = True):
+        self.fd = sys.stdin.fileno() if sys.stdin.isatty() else None
         self.old_settings = None
+        self.enable_mouse = enable_mouse
 
     def __enter__(self):
-        if sys.stdin.isatty():
+        if self.fd is not None:
             self.old_settings = termios.tcgetattr(self.fd)
             tty.setcbreak(self.fd)
+            if self.enable_mouse:
+                # Enable button reporting (1000) and SGR extended coordinates (1006)
+                # This activates mouse wheel and touchpad scrolling in terminal
+                sys.stdout.write("\033[?1000h\033[?1006h")
+                sys.stdout.flush()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.old_settings is not None:
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+        if self.fd is not None:
+            if self.enable_mouse:
+                # Disable mouse reporting
+                sys.stdout.write("\033[?1000l\033[?1006l")
+                sys.stdout.flush()
+            if self.old_settings is not None:
+                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+
+
+def parse_input_bytes(data: bytes) -> List[str]:
+    """
+    Parse low-level raw byte streams into logical keys and mouse events.
+    Handles standard ANSI arrows, DEC cursor keys (SS3), SGR mouse tracking,
+    legacy X10 mouse tracking, and modifier escape sequences without buffering delays.
+    """
+    events = []
+    i = 0
+    n = len(data)
+    while i < n:
+        if data[i:i+1] == b'\x1b':
+            rest = data[i:]
+            # 1. SGR Mouse: \x1b[<(\d+);(\d+);(\d+)([Mm])
+            m = re.match(rb'^\x1b\[<(\d+);(\d+);(\d+)([Mm])', rest)
+            if m:
+                btn = int(m.group(1))
+                # btn 64 = wheel up, btn 65 = wheel down
+                if btn == 64:
+                    events.append("MOUSE_UP")
+                elif btn == 65:
+                    events.append("MOUSE_DOWN")
+                # Any other buttons (click, release) are consumed safely
+                i += len(m.group(0))
+                continue
+
+            # 2. Legacy X10 Mouse: \x1b[M(btn)(x)(y)
+            if rest.startswith(b'\x1b[M') and len(rest) >= 6:
+                cb = rest[3] - 32
+                if cb == 64:
+                    events.append("MOUSE_UP")
+                elif cb == 65:
+                    events.append("MOUSE_DOWN")
+                i += 6
+                continue
+
+            # 3. Arrow Keys: \x1b[A, \x1bOA, \x1b[1;2A, \x1b[1;5A, etc.
+            m = re.match(rb'^\x1b(\[|O)(?:[0-9;]*)([A-D])', rest)
+            if m:
+                code = m.group(2)
+                mapping = {b'A': 'UP', b'B': 'DOWN', b'C': 'RIGHT', b'D': 'LEFT'}
+                events.append(mapping.get(code, 'UNKNOWN'))
+                i += len(m.group(0))
+                continue
+
+            # 4. PageUp / PageDown CSI tilde sequences
+            m = re.match(rb'^\x1b\[([0-9;]*)~', rest)
+            if m:
+                num = m.group(1)
+                if num.startswith(b'5'):
+                    events.append('PAGE_UP')
+                elif num.startswith(b'6'):
+                    events.append('PAGE_DOWN')
+                i += len(m.group(0))
+                continue
+
+            # 5. Standalone ESC (at end of chunk or followed by regular characters)
+            if len(rest) == 1:
+                events.append('ESC')
+                i += 1
+                continue
+
+            # 6. Any other unhandled escape sequence starting with \x1b[ or \x1bO
+            if rest.startswith(b'\x1b[') or rest.startswith(b'\x1bO'):
+                end_pos = 2
+                while end_pos < len(rest) and not (rest[end_pos:end_pos+1].isalpha() or rest[end_pos:end_pos+1] == b'~'):
+                    end_pos += 1
+                if end_pos < len(rest):
+                    end_pos += 1
+                i += end_pos
+                continue
+
+            events.append('ESC')
+            i += 1
+
+        elif data[i:i+1] in (b'\r', b'\n'):
+            events.append('ENTER')
+            i += 1
+        elif data[i:i+1] in (b'\x7f', b'\x08'):
+            events.append('BACKSPACE')
+            i += 1
+        elif data[i:i+1] == b'\x03':
+            events.append('CTRL_C')
+            i += 1
+        elif data[i:i+1] == b'\x15':
+            events.append('CTRL_U')
+            i += 1
+        elif data[i:i+1] == b'\x04':
+            events.append('CTRL_D')
+            i += 1
+        else:
+            try:
+                ch = data[i:i+1].decode('utf-8')
+                events.append(ch)
+            except UnicodeDecodeError:
+                pass
+            i += 1
+    return events
 
 
 def read_key(timeout: float = 0.1) -> Optional[str]:
-    """Read single keypress or escape sequence with timeout."""
+    """Read single keypress or escape sequence with timeout using unbuffered os.read."""
+    global _key_buffer
+    if _key_buffer:
+        return _key_buffer.pop(0)
+
     if not sys.stdin.isatty():
         return None
-    r, _, _ = select.select([sys.stdin], [], [], timeout)
+
+    fd = sys.stdin.fileno()
+    r, _, _ = select.select([fd], [], [], timeout)
     if not r:
         return None
 
-    ch = sys.stdin.read(1)
-    if ch == "\033":
-        # Check if more characters follow immediately
-        r2, _, _ = select.select([sys.stdin], [], [], 0.05)
-        if not r2:
-            return "ESC"
-        ch2 = sys.stdin.read(1)
-        if ch2 == "[":
-            ch3 = sys.stdin.read(1)
-            # Arrow keys
-            if ch3 == "A":
-                return "UP"
-            elif ch3 == "B":
-                return "DOWN"
-            elif ch3 == "C":
-                return "RIGHT"
-            elif ch3 == "D":
-                return "LEFT"
-            # If any other CSI sequence (like PageUp/Down or modifiers), drain until terminating char
-            curr = ch3
-            while curr and not (curr.isalpha() or curr == "~"):
-                r_more, _, _ = select.select([sys.stdin], [], [], 0.02)
-                if r_more:
-                    curr = sys.stdin.read(1)
-                else:
-                    break
-            if curr == "A":
-                return "UP"
-            elif curr == "B":
-                return "DOWN"
+    try:
+        data = os.read(fd, 1024)
+        if not data:
             return None
-        elif ch2 == "O":
-            ch3 = sys.stdin.read(1)
-            if ch3 == "A":
-                return "UP"
-            elif ch3 == "B":
-                return "DOWN"
-            return None
-        return "ESC"
-    elif ch in ("\r", "\n"):
-        return "ENTER"
-    elif ch in ("\x7f", "\x08"):
-        return "BACKSPACE"
-    elif ch == "\x03":
-        return "CTRL_C"
-    elif ch == "\x15":
-        return "CTRL_U"
-    return ch
+        _key_buffer.extend(parse_input_bytes(data))
+        if _key_buffer:
+            return _key_buffer.pop(0)
+    except Exception:
+        return None
+
+    return None
 
 
 class TerminalUI:
@@ -133,7 +216,7 @@ class TerminalUI:
         atexit.register(self._restore_cursor)
 
     def _restore_cursor(self):
-        sys.stdout.write("\033[?25h\033[0m")
+        sys.stdout.write("\033[?1000l\033[?1006l\033[?25h\033[0m")
         sys.stdout.flush()
 
     def run(self):
@@ -312,9 +395,9 @@ class TerminalUI:
                     if not key:
                         continue
 
-                    if key in ("j", "DOWN"):
+                    if key in ("j", "DOWN", "MOUSE_DOWN", "PAGE_DOWN"):
                         selected_idx = min(len(self.threads) - 1, selected_idx + 1)
-                    elif key in ("k", "UP"):
+                    elif key in ("k", "UP", "MOUSE_UP", "PAGE_UP"):
                         selected_idx = max(0, selected_idx - 1)
                     elif key == "ENTER":
                         self.current_thread = self.threads[selected_idx]
@@ -406,7 +489,7 @@ class TerminalUI:
         vanish_badge = f" {BOLD}{MAGENTA}[👻 VANISH ACTIVE]{RESET}" if self.vanish_mode_active else ""
 
         frame.append(f"{BOLD}{BLUE}═" * (cols - 1) + f"{RESET}\033[K\n")
-        frame.append(f" {BOLD}Chat: {CYAN}@{title}{RESET}{vanish_badge}  {DIM}(↑/↓: scroll history  │  type ':' for commands){RESET}\033[K\n")
+        frame.append(f" {BOLD}Chat: {CYAN}@{title}{RESET}{vanish_badge}  {DIM}(↑/↓ or Mouse/Touchpad Scroll  │  type ':' for commands){RESET}\033[K\n")
         frame.append(f"{BOLD}{BLUE}═" * (cols - 1) + f"{RESET}\033[K\n")
 
         # Chat viewport calculation
@@ -437,7 +520,7 @@ class TerminalUI:
 
         scroll_indicator = ""
         if self.scroll_offset > 0:
-            scroll_indicator = f" {YELLOW}{BOLD}[SCROLLED UP: -{self.scroll_offset} lines (Press Down Arrow to return)]{RESET}"
+            scroll_indicator = f" {YELLOW}{BOLD}[SCROLLED UP: -{self.scroll_offset} lines (↓ or Scroll Down to return)]{RESET}"
 
         status_notice = ""
         if self.status_message and (time.time() - self.status_time < 4.0):
@@ -513,7 +596,7 @@ class TerminalUI:
         self.scroll_offset = 0
 
         # Initial fetch
-        self.messages = self.client.get_thread_messages(thread_id, amount=30)
+        self.messages = self.client.get_thread_messages(thread_id, amount=50)
         self.rebuild_line_buffer()
 
         # Start background polling
@@ -533,18 +616,53 @@ class TerminalUI:
                         self.running = False
                         break
 
-                    # 1. Arrow keys scroll message history
-                    if key == "UP":
+                    # 1. Scrolling: Arrow keys, Touchpad/Mouse Wheel, and PageUp/PageDown
+                    if key in ("UP", "MOUSE_UP", "PAGE_UP"):
+                        delta = 1
+                        if key == "MOUSE_UP":
+                            delta = 3
+                        elif key == "PAGE_UP":
+                            delta = 6
+
                         total = len(self.rendered_lines)
                         cols, rows = self.get_term_size()
                         is_cmd = self.input_buffer.startswith(":")
                         footer_h = 4 if is_cmd else 3
                         max_s = max(0, total - (rows - (3 + footer_h)))
-                        self.scroll_offset = min(max_s, self.scroll_offset + 1)
+
+                        # If user scrolled to the top and older messages might exist on Instagram:
+                        if self.scroll_offset >= max_s and not getattr(self, "_loading_older", False) and len(self.messages) < 200:
+                            self._loading_older = True
+                            self.set_status("Fetching older messages from Instagram...")
+                            try:
+                                next_amount = len(self.messages) + 30
+                                older_msgs = self.client.get_thread_messages(thread_id, amount=next_amount)
+                                if len(older_msgs) > len(self.messages):
+                                    old_total = len(self.rendered_lines)
+                                    self.messages = older_msgs
+                                    self.rebuild_line_buffer()
+                                    new_total = len(self.rendered_lines)
+                                    self.scroll_offset += (new_total - old_total)
+                                    total = new_total
+                                    max_s = max(0, total - (rows - (3 + footer_h)))
+                                    self.set_status(f"Loaded {len(older_msgs)} messages")
+                                else:
+                                    self.set_status("Reached start of conversation")
+                            except Exception:
+                                pass
+                            finally:
+                                self._loading_older = False
+
+                        self.scroll_offset = min(max_s, self.scroll_offset + delta)
                         self.render_chat_screen()
 
-                    elif key == "DOWN":
-                        self.scroll_offset = max(0, self.scroll_offset - 1)
+                    elif key in ("DOWN", "MOUSE_DOWN", "PAGE_DOWN"):
+                        delta = 1
+                        if key == "MOUSE_DOWN":
+                            delta = 3
+                        elif key == "PAGE_DOWN":
+                            delta = 6
+                        self.scroll_offset = max(0, self.scroll_offset - delta)
                         self.render_chat_screen()
 
                     elif key == "BACKSPACE":
@@ -933,7 +1051,8 @@ class TerminalUI:
         sys.stdout.write("\033[2J\033[H")
         print(f"{BOLD}{CYAN}=== i-cli Commands & Navigation Help ==={RESET}\n")
         print(f"  {BOLD}Navigation & Messaging{RESET}:")
-        print(f"    {BOLD}Up{RESET} / {BOLD}Down{RESET}       Scroll through message history")
+        print(f"    {BOLD}Up{RESET} / {BOLD}Down{RESET}       Scroll through message history line-by-line")
+        print(f"    {BOLD}Touchpad / Mouse{RESET} Scroll through history using mouse wheel or trackpad")
         print(f"    {BOLD}Esc{RESET}            Clear input / return to latest message")
         print(f"    {BOLD}Enter{RESET}          Send message (or execute command)\n")
         print(f"  {BOLD}Commands (Type ':' in chat to see hints){RESET}:")
