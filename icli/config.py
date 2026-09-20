@@ -7,8 +7,9 @@ from pathlib import Path
 CONFIG_DIR = Path(os.path.expanduser("~/.config/i-cli"))
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-# Isolated session and cookie storage
+# Isolated session, device, and cookie storage
 SESSION_FILE = CONFIG_DIR / "session.json"
+DEVICE_FILE = CONFIG_DIR / "device.json"
 
 # Download directory for explicit :d command
 DOWNLOAD_DIR = Path(os.path.expanduser("~/Downloads"))
@@ -38,6 +39,7 @@ atexit.register(cleanup_ram_dir)
 IMV_PATH = shutil.which("imv") or "imv"
 MPV_PATH = shutil.which("mpv") or "mpv"
 CHAFA_PATH = shutil.which("chafa") or "chafa"
+FFMPEG_PATH = shutil.which("ffmpeg") or "ffmpeg"
 
 # Thumbnail defaults
 THUMB_MAX_WIDTH = 28

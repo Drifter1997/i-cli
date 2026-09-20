@@ -149,12 +149,63 @@ class TerminalUI:
         sys.stdout.flush()
         self.show_banner()
 
-        if not self.client.is_logged_in():
+        session_stat = self.client.check_session()
+        if session_stat["status"] == "checkpoint":
+            if not self.handle_checkpoint_dialog():
+                print(f"\n{RED}Checkpoint pending. Please approve in your Instagram app or log in with Session ID.{RESET}")
+                return
+        elif session_stat["status"] != "active":
             if not self.interactive_auth_flow():
                 print(f"\n{RED}Authentication required to proceed. Exiting.{RESET}")
                 return
 
         self.inbox_loop()
+
+    def handle_checkpoint_dialog(self) -> bool:
+        """Guide the user through approving a native Instagram checkpoint challenge."""
+        sys.stdout.write("\033[2J\033[H")
+        print(f"{BOLD}{YELLOW}╔═══════════════════════════════════════════════════════════════╗{RESET}")
+        print(f"{BOLD}{YELLOW}║               ⚠️  INSTAGRAM CHECKPOINT DETECTED               ║{RESET}")
+        print(f"{BOLD}{YELLOW}╚═══════════════════════════════════════════════════════════════╝{RESET}\n")
+        print(f"{WHITE}Instagram detected an unrecognized client device and placed a security hold.{RESET}\n")
+        print(f"{BOLD}How to approve this login:{RESET}")
+        print(f"  1. Open the {BOLD}Instagram app{RESET} on your phone (or visit {CYAN}instagram.com{RESET}).")
+        print(f"  2. You will see an alert: {YELLOW}'Was this you? (Google Pixel 8 Pro / Linux)'{RESET}.")
+        print(f"  3. Tap {GREEN}{BOLD}'This Was Me'{RESET} to whitelist this device.")
+        print(f"  4. Once confirmed, press {BOLD}[Enter]{RESET} here to resume chatting!\n")
+        print(f"{DIM}── Or Bypass With Session ID ───────────────────────────────────────{RESET}")
+        print(f"  Type {BOLD}:s{RESET} to log in using your {GREEN}Session ID Cookie{RESET} (bypasses checkpoint challenges).")
+        print(f"  Type {BOLD}:q{RESET} to exit.\n")
+
+        ans = input(f"{BOLD}Press Enter to retry or enter :s / :q: {RESET}").strip()
+        if ans == ":q":
+            return False
+        elif ans == ":s":
+            session_id = input(f"{BOLD}Enter sessionid cookie: {RESET}").strip()
+            if session_id:
+                print(f"\n{CYAN}Authenticating with session ID...{RESET}")
+                res = self.client.login_by_sessionid(session_id)
+                if res["success"]:
+                    print(f"{GREEN}✓ {res['message']}{RESET}")
+                    time.sleep(1)
+                    return True
+                else:
+                    print(f"{RED}✗ {res['message']}{RESET}")
+                    time.sleep(2)
+            return False
+        else:
+            print(f"\n{CYAN}Re-verifying session...{RESET}")
+            res = self.client.check_session()
+            if res["status"] == "active":
+                print(f"{GREEN}✓ Session confirmed as @{res.get('username')}!{RESET}")
+                time.sleep(1)
+                return True
+            elif res["status"] == "checkpoint":
+                print(f"{YELLOW}Checkpoint still pending. Please confirm 'This was me' on your phone or use Session ID.{RESET}")
+                time.sleep(2)
+                return self.interactive_auth_flow()
+            else:
+                return self.interactive_auth_flow()
 
     def show_banner(self):
         print(f"{BOLD}{CYAN}╔═══════════════════════════════════════════════════════════════╗{RESET}")
@@ -322,11 +373,16 @@ class TerminalUI:
 
                 media_info = msg.get("media")
                 if media_info:
-                    media_items.append(media_info)
-                    media_idx = len(media_items)
                     m_type = media_info.get("type", "media")
                     m_label = media_info.get("label", m_type.capitalize())
 
+                    if m_type == "call":
+                        lines.append(f"{DIM}[{time_str}]{RESET} {YELLOW}{BOLD}📞 [{m_label}]{RESET}")
+                        lines.append("")
+                        continue
+
+                    media_items.append(media_info)
+                    media_idx = len(media_items)
                     lines.append(f"{DIM}[{time_str}]{RESET} {sender_color}{BOLD}{sender}{RESET}{pending_tag}: {vanish_tag}")
                     lines.append(f"   {YELLOW}{BOLD}[Media #{media_idx}: {m_label}]{RESET} {DIM}(Type :p {media_idx} to play in RAM, :d {media_idx} to save){RESET}")
 
@@ -698,12 +754,212 @@ class TerminalUI:
         elif cmd == ":d" or cmd.startswith(":d "):
             self.handle_download_command(cmd)
             return False
+        elif cmd.startswith(":photo ") or cmd.startswith(":send-photo "):
+            path = cmd.split(maxsplit=1)[1].strip().strip('"').strip("'")
+            self.handle_send_photo(thread_id, path)
+            return False
+        elif cmd.startswith(":video ") or cmd.startswith(":send-video "):
+            path = cmd.split(maxsplit=1)[1].strip().strip('"').strip("'")
+            self.handle_send_video(thread_id, path)
+            return False
+        elif cmd.startswith(":audio ") or cmd.startswith(":send-audio "):
+            path = cmd.split(maxsplit=1)[1].strip().strip('"').strip("'")
+            self.handle_send_audio(thread_id, path)
+            return False
+        elif cmd in (":rec", ":record"):
+            self.handle_voice_recording(thread_id)
+            return False
         elif cmd in (":h", ":help", ":?"):
             self.show_help_dialog()
             return False
         else:
             self.set_status(f"Unknown command: {cmd}")
             return False
+
+    def handle_send_photo(self, thread_id: str, path: str):
+        """Send photo to conversation."""
+        from pathlib import Path
+        p = Path(path).expanduser().resolve()
+        if not p.exists():
+            self.set_status(f"Error: Photo not found: {path}")
+            return
+
+        self.set_status(f"Sending photo: {p.name}...")
+        local_msg = {
+            "id": f"local_{uuid.uuid4().hex[:6]}",
+            "user_id": self.client.user_id,
+            "is_me": True,
+            "timestamp": datetime.now(),
+            "text": f"[Photo: {p.name}]",
+            "item_type": "media",
+            "is_vanish": self.vanish_mode_active,
+            "media": {"type": "image", "url": None, "thumbnail_url": str(p), "label": "Photo"},
+            "pending": True
+        }
+        self.messages.append(local_msg)
+        self.scroll_offset = 0
+        self.rebuild_line_buffer()
+        self.render_chat_screen()
+
+        def async_photo():
+            res = self.client.send_photo(thread_id, str(p), is_vanish=self.vanish_mode_active)
+            local_msg["pending"] = False
+            if res.get("success") and res.get("id"):
+                local_msg["id"] = res["id"]
+                self.set_status("Photo sent successfully.")
+            else:
+                self.set_status(res.get("message", "Failed to send photo."))
+            self.rebuild_line_buffer()
+            if self.scroll_offset == 0:
+                self.render_chat_screen()
+
+        threading.Thread(target=async_photo, daemon=True).start()
+
+    def handle_send_video(self, thread_id: str, path: str):
+        """Send video to conversation."""
+        from pathlib import Path
+        p = Path(path).expanduser().resolve()
+        if not p.exists():
+            self.set_status(f"Error: Video not found: {path}")
+            return
+
+        self.set_status(f"Sending video: {p.name}...")
+        local_msg = {
+            "id": f"local_{uuid.uuid4().hex[:6]}",
+            "user_id": self.client.user_id,
+            "is_me": True,
+            "timestamp": datetime.now(),
+            "text": f"[Video: {p.name}]",
+            "item_type": "media",
+            "is_vanish": self.vanish_mode_active,
+            "media": {"type": "video", "url": None, "label": "Video"},
+            "pending": True
+        }
+        self.messages.append(local_msg)
+        self.scroll_offset = 0
+        self.rebuild_line_buffer()
+        self.render_chat_screen()
+
+        def async_video():
+            res = self.client.send_video(thread_id, str(p), is_vanish=self.vanish_mode_active)
+            local_msg["pending"] = False
+            if res.get("success") and res.get("id"):
+                local_msg["id"] = res["id"]
+                self.set_status("Video sent successfully.")
+            else:
+                self.set_status(res.get("message", "Failed to send video."))
+            self.rebuild_line_buffer()
+            if self.scroll_offset == 0:
+                self.render_chat_screen()
+
+        threading.Thread(target=async_video, daemon=True).start()
+
+    def handle_send_audio(self, thread_id: str, path: str):
+        """Send audio file as voice note."""
+        from pathlib import Path
+        p = Path(path).expanduser().resolve()
+        if not p.exists():
+            self.set_status(f"Error: Audio not found: {path}")
+            return
+
+        self.set_status(f"Sending voice note: {p.name}...")
+        local_msg = {
+            "id": f"local_{uuid.uuid4().hex[:6]}",
+            "user_id": self.client.user_id,
+            "is_me": True,
+            "timestamp": datetime.now(),
+            "text": f"[Voice Note: {p.name}]",
+            "item_type": "voice_media",
+            "is_vanish": self.vanish_mode_active,
+            "media": {"type": "audio", "url": None, "label": "Voice Note"},
+            "pending": True
+        }
+        self.messages.append(local_msg)
+        self.scroll_offset = 0
+        self.rebuild_line_buffer()
+        self.render_chat_screen()
+
+        def async_audio():
+            res = self.client.send_voice(thread_id, str(p), is_vanish=self.vanish_mode_active)
+            local_msg["pending"] = False
+            if res.get("success") and res.get("id"):
+                local_msg["id"] = res["id"]
+                self.set_status("Voice note sent successfully.")
+            else:
+                self.set_status(res.get("message", "Failed to send audio."))
+            self.rebuild_line_buffer()
+            if self.scroll_offset == 0:
+                self.render_chat_screen()
+
+        threading.Thread(target=async_audio, daemon=True).start()
+
+    def handle_voice_recording(self, thread_id: str):
+        """Record audio directly from microphone in RAM and send."""
+        from icli.media import record_voice_start, record_voice_stop
+
+        proc, out_path = record_voice_start()
+        if not proc or not out_path:
+            self.set_status("Error: Could not access microphone with ffmpeg.")
+            return
+
+        start_time = time.time()
+        cancelled = False
+
+        while proc.poll() is None:
+            elapsed = int(time.time() - start_time)
+            self.set_status(f"🎙️  RECORDING VOICE NOTE ({elapsed}s)... [Enter: Send | Esc/c: Cancel]")
+            k = read_key(timeout=0.4)
+            if k in ("ENTER", "\r", "\n"):
+                break
+            elif k in ("ESC", "c", "C", "CTRL_C"):
+                cancelled = True
+                break
+
+        record_voice_stop(proc, out_path)
+
+        if cancelled:
+            if out_path.exists():
+                try:
+                    out_path.unlink()
+                except Exception:
+                    pass
+            self.set_status("Voice recording cancelled.")
+            return
+
+        if not out_path.exists() or out_path.stat().st_size < 100:
+            self.set_status("Error: No audio captured.")
+            return
+
+        self.set_status("Sending recorded voice note...")
+        local_msg = {
+            "id": f"local_{uuid.uuid4().hex[:6]}",
+            "user_id": self.client.user_id,
+            "is_me": True,
+            "timestamp": datetime.now(),
+            "text": "[Voice Note]",
+            "item_type": "voice_media",
+            "is_vanish": self.vanish_mode_active,
+            "media": {"type": "audio", "url": None, "label": "Voice Note"},
+            "pending": True
+        }
+        self.messages.append(local_msg)
+        self.scroll_offset = 0
+        self.rebuild_line_buffer()
+        self.render_chat_screen()
+
+        def async_rec_voice():
+            res = self.client.send_voice(thread_id, str(out_path), is_vanish=self.vanish_mode_active)
+            local_msg["pending"] = False
+            if res.get("success") and res.get("id"):
+                local_msg["id"] = res["id"]
+                self.set_status("Voice note sent successfully.")
+            else:
+                self.set_status(res.get("message", "Failed to send voice note."))
+            self.rebuild_line_buffer()
+            if self.scroll_offset == 0:
+                self.render_chat_screen()
+
+        threading.Thread(target=async_rec_voice, daemon=True).start()
 
     def handle_preview_command(self, cmd: str):
         """Preview media with imv/mpv purely in RAM."""
@@ -748,7 +1004,7 @@ class TerminalUI:
     def show_help_dialog(self):
         """Show command help modal."""
         sys.stdout.write("\033[2J\033[H")
-        print(f"{BOLD}{CYAN}=== i-cli Commands & Vim Navigation Help ==={RESET}\n")
+        print(f"{BOLD}{CYAN}=== i-cli Commands & Navigation Help ==={RESET}\n")
         print(f"  {BOLD}INSERT Mode (Typing){RESET}:")
         print(f"    {BOLD}Up{RESET} / {BOLD}Down{RESET}       Scroll through message history directly while typing")
         print(f"    {BOLD}PgUp{RESET} / {BOLD}PgDn{RESET}     Scroll page-by-page through message history")
@@ -761,9 +1017,15 @@ class TerminalUI:
         print(f"    {BOLD}gg{RESET}             Jump to oldest message (top)")
         print(f"    {BOLD}G{RESET}              Jump to latest message (bottom)")
         print(f"    {BOLD}i{RESET} / {BOLD}a{RESET}          Enter INSERT mode to type\n")
-        print(f"  {BOLD}Media & Actions{RESET}:")
+        print(f"  {BOLD}Media Viewing & Downloading{RESET}:")
         print(f"    {BOLD}:p [n]{RESET}         Play media in RAM ({BOLD}imv{RESET} for images, {BOLD}mpv{RESET} for video/audio)")
-        print(f"    {BOLD}:d [n]{RESET}         Download media to {BOLD}~/Downloads/{RESET}")
+        print(f"    {BOLD}:d [n]{RESET}         Download media to {BOLD}~/Downloads/{RESET}\n")
+        print(f"  {BOLD}Sending Media & Voice Notes{RESET}:")
+        print(f"    {BOLD}:rec{RESET}           Record audio voice note from microphone and send")
+        print(f"    {BOLD}:photo <path>{RESET}  Send a photo file")
+        print(f"    {BOLD}:video <path>{RESET}  Send a video file (.mp4)")
+        print(f"    {BOLD}:audio <path>{RESET}  Send an audio file as a voice note\n")
+        print(f"  {BOLD}Actions & Controls{RESET}:")
         print(f"    {BOLD}:v{RESET}             Toggle Vanish Mode on/off")
         print(f"    {BOLD}:v <text>{RESET}      Send single message in Vanish Mode")
         print(f"    {BOLD}:t{RESET}             Return to Inbox list")

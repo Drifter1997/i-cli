@@ -5,7 +5,7 @@ import threading
 import subprocess
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 import requests
 from icli.config import (
@@ -282,4 +282,90 @@ def extract_media_info(msg: Any) -> Optional[Dict[str, Any]]:
                 "label": "GIF"
             }
 
+    # Check video_call_event (Audio / Video Call notification)
+    if getattr(msg, "item_type", None) == "video_call_event":
+        raw = getattr(msg, "video_call_event", {}) or {}
+        action = raw.get("action", "call") if isinstance(raw, dict) else "call"
+        return {
+            "type": "call",
+            "url": None,
+            "thumbnail_url": None,
+            "label": f"Call Event ({action})"
+        }
+
     return None
+
+
+def convert_audio_to_m4a(input_path: Path) -> Optional[Path]:
+    """Convert any audio file to AAC/m4a in RAM for Instagram voice DM compatibility."""
+    from icli.config import FFMPEG_PATH, RAM_DIR
+
+    input_path = Path(input_path)
+    if not input_path.exists():
+        return None
+
+    if input_path.suffix.lower() == ".m4a":
+        return input_path
+
+    output_path = RAM_DIR / f"converted_{uuid.uuid4().hex[:6]}.m4a"
+    try:
+        res = subprocess.run(
+            [
+                FFMPEG_PATH,
+                "-y",
+                "-i", str(input_path),
+                "-c:a", "aac",
+                "-b:a", "64k",
+                "-ar", "44100",
+                str(output_path)
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30
+        )
+        if res.returncode == 0 and output_path.exists():
+            return output_path
+    except Exception:
+        pass
+    return None
+
+
+def record_voice_start() -> Tuple[Optional[subprocess.Popen], Optional[Path]]:
+    """Start recording microphone audio directly into RAM using ffmpeg."""
+    import signal
+    from icli.config import FFMPEG_PATH, RAM_DIR
+
+    output_path = RAM_DIR / f"mic_rec_{uuid.uuid4().hex[:6]}.m4a"
+    try:
+        proc = subprocess.Popen(
+            [
+                FFMPEG_PATH,
+                "-y",
+                "-f", "pulse",
+                "-i", "default",
+                "-c:a", "aac",
+                "-b:a", "64k",
+                "-ar", "44100",
+                str(output_path)
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return proc, output_path
+    except Exception:
+        return None, None
+
+
+def record_voice_stop(proc: subprocess.Popen, output_path: Path) -> bool:
+    """Stop recording audio gracefully and finalize the m4a container."""
+    import signal
+    try:
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=5)
+        return output_path.exists() and output_path.stat().st_size > 100
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return output_path.exists() and output_path.stat().st_size > 100

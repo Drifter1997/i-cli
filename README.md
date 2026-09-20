@@ -81,6 +81,10 @@ A minimal, fast, and simple CLI/TUI Instagram messaging client designed for Neov
 | Command | Action |
 |---|---|
 | `<text>` | Send regular message (or vanish message if Vanish Mode is on) — sent instantly with 0ms UI lag |
+| `:rec` / `:record` | **Record voice note from microphone** in RAM and send |
+| `:photo <path>` | Send a photo file (JPG/PNG/WebP) to conversation |
+| `:video <path>` | Send an MP4 video file to conversation |
+| `:audio <path>` | Send any audio file as a voice note (auto-converted to AAC/m4a in RAM) |
 | `:p` | Play / preview most recent media in RAM (`imv` / `mpv`) |
 | `:p <n>` | Play / preview media item `#n` in RAM |
 | `:d` | Explicitly download most recent media to `~/Downloads/` |
@@ -101,6 +105,15 @@ A minimal, fast, and simple CLI/TUI Instagram messaging client designed for Neov
 | `:r` | Refresh inbox threads |
 | `:logout` | Clear saved session and logout |
 | `:q` | Quit application |
+
+---
+
+## 📞 Audio / Video Calls Notice
+- **Why Live Calls Aren't Supported in CLI**: Instagram audio/video calling relies on Meta's internal, proprietary WebRTC signaling and private encrypted TURN gateways. These protocols are closed-source, unversioned, and not exposed through any public or reverse-engineered API.
+- **What is Supported**:
+  - **Voice Notes (`:rec`)**: Record and send voice notes with your microphone.
+  - **Video Sharing (`:video`)**: Send and receive video messages with instant RAM playback (`:p`).
+  - **Call Event Alerts**: Incoming and missed call events appear directly in chat (`📞 [Call Event]`).
 
 ---
 
