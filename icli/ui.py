@@ -388,7 +388,7 @@ class TerminalUI:
 
         scroll_indicator = ""
         if self.scroll_offset > 0:
-            scroll_indicator = f" {YELLOW}{BOLD}[SCROLLED UP: -{self.scroll_offset} lines (G: bottom)]{RESET}"
+            scroll_indicator = f" {YELLOW}{BOLD}[SCROLLED UP: -{self.scroll_offset} lines (Down/G: bottom)]{RESET}"
 
         status_notice = ""
         if self.status_message and (time.time() - self.status_time < 4.0):
@@ -479,20 +479,27 @@ class TerminalUI:
                             self.mode = "NORMAL"
                             self.render_chat_screen()
 
+                        elif key == "UP":
+                            total = len(self.rendered_lines)
+                            cols, rows = self.get_term_size()
+                            max_s = max(0, total - (rows - 6))
+                            self.scroll_offset = min(max_s, self.scroll_offset + 1)
+                            self.render_chat_screen()
+
+                        elif key == "DOWN":
+                            self.scroll_offset = max(0, self.scroll_offset - 1)
+                            self.render_chat_screen()
+
                         elif key in ("PAGE_UP", "PAGE_DOWN"):
                             cols, rows = self.get_term_size()
                             page_step = max(4, rows // 2)
+                            total = len(self.rendered_lines)
+                            max_s = max(0, total - (rows - 6))
                             if key == "PAGE_UP":
-                                self.scroll_offset += page_step
+                                self.scroll_offset = min(max_s, self.scroll_offset + page_step)
                             else:
                                 self.scroll_offset = max(0, self.scroll_offset - page_step)
                             self.render_chat_screen()
-
-                        elif key == "UP":
-                            if not self.input_buffer:
-                                self.mode = "NORMAL"
-                                self.scroll_offset += 1
-                                self.render_chat_screen()
 
                         elif key == "BACKSPACE":
                             if self.input_buffer:
@@ -742,15 +749,18 @@ class TerminalUI:
         """Show command help modal."""
         sys.stdout.write("\033[2J\033[H")
         print(f"{BOLD}{CYAN}=== i-cli Commands & Vim Navigation Help ==={RESET}\n")
-        print(f"  {BOLD}Vim Navigation (NORMAL Mode){RESET}:")
+        print(f"  {BOLD}INSERT Mode (Typing){RESET}:")
+        print(f"    {BOLD}Up{RESET} / {BOLD}Down{RESET}       Scroll through message history directly while typing")
+        print(f"    {BOLD}PgUp{RESET} / {BOLD}PgDn{RESET}     Scroll page-by-page through message history")
+        print(f"    {BOLD}Esc{RESET}            Enter NORMAL mode for Vim navigation\n")
+        print(f"  {BOLD}NORMAL Mode (Vim Navigation){RESET}:")
         print(f"    {BOLD}j{RESET} / {BOLD}Down{RESET}       Scroll down 1 line")
         print(f"    {BOLD}k{RESET} / {BOLD}Up{RESET}         Scroll up 1 line")
         print(f"    {BOLD}Ctrl+d{RESET} / {BOLD}PgDn{RESET} Scroll down half page")
         print(f"    {BOLD}Ctrl+u{RESET} / {BOLD}PgUp{RESET} Scroll up half page")
         print(f"    {BOLD}gg{RESET}             Jump to oldest message (top)")
         print(f"    {BOLD}G{RESET}              Jump to latest message (bottom)")
-        print(f"    {BOLD}i{RESET} / {BOLD}a{RESET}          Enter INSERT mode to type")
-        print(f"    {BOLD}Esc{RESET}            Return to NORMAL mode\n")
+        print(f"    {BOLD}i{RESET} / {BOLD}a{RESET}          Enter INSERT mode to type\n")
         print(f"  {BOLD}Media & Actions{RESET}:")
         print(f"    {BOLD}:p [n]{RESET}         Play media in RAM ({BOLD}imv{RESET} for images, {BOLD}mpv{RESET} for video/audio)")
         print(f"    {BOLD}:d [n]{RESET}         Download media to {BOLD}~/Downloads/{RESET}")

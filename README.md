@@ -55,10 +55,15 @@ A minimal, fast, and simple CLI/TUI Instagram messaging client designed for Neov
 ## ⌨️ Commands & Vim Navigation
 
 ### Modes
-- **INSERT Mode** (default): Type messages or `:commands` and press `Enter` to send instantly. Press `Esc` to enter NORMAL mode.
+- **INSERT Mode** (default): Type messages or `:commands` and press `Enter` to send instantly. Press `Up` / `Down` arrows to scroll through message history directly while typing. Press `Esc` to enter NORMAL mode.
 - **NORMAL Mode**: Full Vim message navigation. Press `i` or `a` to return to INSERT mode.
 
 ### In Chat Window
+
+#### Scrolling in INSERT Mode
+- `Up` Arrow: Scroll up through previous messages
+- `Down` Arrow: Scroll down towards recent messages
+- `PageUp` / `PageDown`: Fast page scrolling
 
 #### Vim Navigation (NORMAL Mode)
 | Key | Action |
@@ -71,8 +76,6 @@ A minimal, fast, and simple CLI/TUI Instagram messaging client designed for Neov
 | `G` | Jump to bottom (latest messages) |
 | `i` / `a` | Enter INSERT mode to type |
 | `Esc` | Return to NORMAL mode |
-
-*(Note: `PageUp` and `PageDown` also work directly while in INSERT mode)*
 
 #### Chat Commands
 | Command | Action |
