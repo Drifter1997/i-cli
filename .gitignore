@@ -1,7 +1,55 @@
+# Python virtual environment & bytecode
 .venv/
+venv/
+ENV/
+env/
 __pycache__/
 *.py[cod]
 *$py.class
-*.log
-downloads/
+
+# Pytest and coverage caches
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Logs & temp files
+*.log
+*.tmp
+.tmp/
+
+# Downloaded or cached media (ephemeral)
+downloads/
+*.mp4
+*.mp3
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.aac
+*.m4a
+*.wav
+*.ogg
+
+# ==============================================================================
+# CRITICAL: Credentials, Tokens, Sessions & Secret Protection
+# ==============================================================================
+# Never track or upload any user credentials, session tokens, or device state
+session.json
+*session*.json
+device.json
+*device*.json
+*.session
+*.cookie*
+*.cookies
+cookies/
+tokens/
+*.token
+*.token*
+*.key
+*.pem
+.env
+.env.*
+*.secret
+*credentials*
+auth/
+sessions/

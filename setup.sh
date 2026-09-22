@@ -40,6 +40,12 @@ echo "Installing / updating dependencies..."
 
 chmod +x "$SCRIPT_DIR/i-cli" "$SCRIPT_DIR/setup.sh"
 
+# Install git security hooks to prevent accidental credential commits
+if [ -d "$SCRIPT_DIR/.git" ]; then
+    git config core.hooksPath .githooks 2>/dev/null || true
+    chmod +x "$SCRIPT_DIR/.githooks/"* 2>/dev/null || true
+fi
+
 echo ""
 echo "=== Setup completed successfully! ==="
 echo "You can now run: ./i-cli"
